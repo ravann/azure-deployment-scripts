@@ -1,0 +1,177 @@
+# UTILITY FUNCTIONS
+
+function Save-Environment() {
+    Param(
+        [string] $FileName, 
+        [hashtable] $var
+    )
+    rm -f $FileName
+
+    foreach ($keys in $var.keys) {
+        $out = $keys+"="+$var[$keys]
+        Out-File -FilePath $FileName -InputObject $out -Encoding ASCII -Append
+    }
+}
+
+function Read-Environment {
+    Param(
+        [Parameter(Mandatory=$true)]
+        [String]
+        $FileName
+    )
+
+    # Read the file
+    $file_txt = Get-Content $FileName
+    $file_txt = $file_txt -join [Environment]::NewLine
+
+    # Convert to hash
+    $out = ConvertFrom-StringData($file_txt)
+
+    return $out
+}
+
+### DEFINE FILE LOCATIONS ###
+
+$secrets_file = "/secrets.txt"
+$env_file = "/scripts/.env"
+$completion_file = "/scripts/.completion"
+
+if( (Test-Path $completion_file -PathType Leaf) -eq $true) {
+    $completion = Read-Environment $completion_file
+}
+
+if( (Test-Path $env_file -PathType Leaf) -eq $true) {
+    $env = Read-Environment $env_file
+}
+
+
+### CONNECT TO AZURE ###
+
+$secret = Read-Environment $secrets_file
+
+$PWord = ConvertTo-SecureString -String $secret.PASS -AsPlainText -Force
+$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $secret.APP_ID, $PWord
+
+$azc = Connect-AzAccount -Credential $Credential -Tenant $secret.TENANT -ServicePrincipal
+
+# Get-AzContext
+
+# Get-AzSubscription
+
+# Get-AzLocation
+
+if( $env -eq $null) {
+    $env = @{}
+    # Create Unique ID to create the resources
+    $env.guid = (New-Guid).Guid
+    $env.cguid = $env.guid.Replace("-", "").Substring(0, 20)
+}
+if( $completion -eq $null ) {
+    $completion = @{}
+}
+
+$env.subscription = (Get-AzSubscription).Id
+$env.location = "southeastasia"
+
+### RESOURCE GROUPS ###
+# Create Resource Group
+if($completion.rg -ne $true) {
+    $env.resource_group = "RG-" + $env.guid
+    Write-Output ("Creating Resource Group :", $env.resource_group, "!!!" -join " ")
+
+    $rg = New-AzResourceGroup -Name $env.resource_group -Location $env.location
+    $completion.rg = $true
+} else {
+    Write-Output ("Resource Group :", $env.resource_group, "exists!!!" -join " ")
+}
+
+Save-Environment -FileName $env_file -var $env
+Save-Environment -FileName $completion_file -var $completion
+
+### STORAGE ###
+# Create Storage Account
+if($completion.storage -ne $true) {
+    $env.storage_acc = "sa" + $env.cguid
+    Write-Output ("Creating Storage Account :", $env.storage_acc, "!!!" -join " ")
+
+    $sa = New-AzStorageAccount `
+        -ResourceGroupName $env.resource_group `
+        -AccountName $env.storage_acc `
+        -Location $env.location `
+        -SkuName Standard_LRS
+    # Get the connection string
+    $env.storage_conn_str = $sa.Context.ConnectionString
+    # Get the storage account key
+    $keys = Get-AzStorageAccountKey -ResourceGroupName $env.resource_group -Name $env.storage_acc
+    $env.storage_conn_key = $keys.Value[0]
+
+    $completion.storage = $true
+} else {
+    Write-Output ("Storage Account :", $env.storage_acc, "exsits!!!" -join " ")
+}
+
+# Create storage container
+$env.container_name = "blobstore"
+if($completion.storage_cont -ne $true) {
+    Write-Output ("Creating Storage Container :", $env.container_name, "!!!" -join " ")
+    $cont = New-AzRmStorageContainer -ResourceGroupName $env.resource_group -AccountName $env.storage_acc -ContainerName $env.container_name
+
+    $completion.storage_cont = $true
+} else {
+    Write-Output ("Storage Container :", $env.container_name, "exsits!!!" -join " ")
+}
+
+Save-Environment -FileName $env_file -var $env
+Save-Environment -FileName $completion_file -var $completion
+
+### FUNCTIONS APP ###
+
+# Create Resource Group
+if($completion.func_app -ne $true) {
+
+    $env.app_insights_name = "app-insights-" + $env.guid
+
+    # Create application insights
+    $ai = New-AzApplicationInsights `
+            -Kind other `
+            -ResourceGroupName $env.resource_group `
+            -Name $env.app_insights_name `
+            -location $env.location
+
+    # Generate Application Insights key
+    $permissions = @("ReadTelemetry", "WriteAnnotations")
+    $key_name = "API Key for " + $ai.Name
+
+    $ai_key = New-AzApplicationInsightsApiKey `
+        -ResourceGroupName $env.resource_group `
+        -Name $env.app_insights_name `
+        -Description $key_name `
+        -Permissions $permissions
+
+    $env.app_insights_key = $ai_key.ApiKey
+
+    # Generate Functions APP
+    $env.func_app_name = "func-" + $env.guid
+
+    Register-AzResourceProvider -ProviderNamespace Microsoft.Web
+
+    Write-Output ("Creating Functions App :", $env.func_app_name, "!!!" -join " ")
+
+    $rg = New-AzFunctionApp -Name $env.func_app_name `
+                          -ResourceGroupName $env.resource_group `
+                          -Location $env.location `
+                          -StorageAccount $env.storage_acc `
+                          -Runtime Python `
+                          -RunTimeVersion 3.8 `
+                          -ApplicationInsightsKey $env.app_insights_key `
+                          -ApplicationInsightsName $env.app_insights_name `
+                          -FunctionsVersion 3
+
+    $completion.func_app = $true
+} else {
+    Write-Output ("Resource Group :", $env.func_app_name, "exists!!!" -join " ")
+}
+
+Save-Environment -FileName $env_file -var $env
+Save-Environment -FileName $completion_file -var $completion
+
