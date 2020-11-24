@@ -33,8 +33,8 @@ function Read-Environment {
 ### DEFINE FILE LOCATIONS ###
 
 $secrets_file = "/secrets.txt"
-$env_file = "/scripts/.env"
-$completion_file = "/scripts/.completion"
+$env_file = $pwd.Path + "/.env"
+$completion_file = $pwd.Path + "/.completion"
 
 if( (Test-Path $completion_file -PathType Leaf) -eq $true) {
     $completion = Read-Environment $completion_file
@@ -157,7 +157,7 @@ if($completion.func_app -ne $true) {
 
     Write-Output ("Creating Functions App :", $env.func_app_name, "!!!" -join " ")
 
-    $rg = New-AzFunctionApp -Name $env.func_app_name `
+    $func_app = New-AzFunctionApp -Name $env.func_app_name `
                           -ResourceGroupName $env.resource_group `
                           -Location $env.location `
                           -StorageAccount $env.storage_acc `
@@ -175,3 +175,21 @@ if($completion.func_app -ne $true) {
 Save-Environment -FileName $env_file -var $env
 Save-Environment -FileName $completion_file -var $completion
 
+
+### CREATE A FUNCTION ###
+rm -rf SampleAPI
+func init SampleAPI --python
+cd SampleAPI
+func new --name HttpExample --template "HTTP trigger" --authlevel "anonymous"
+
+for($i = 0; $i -lt 20; $i++) {
+    func azure functionapp publish $env.func_app_name
+    if($? -eq $false) {
+        Write-Output "Failed to publish.  Sleeping for 30 secs"
+        Start-Sleep 30
+    } else {
+        break;
+    }
+}
+
+cd ..
