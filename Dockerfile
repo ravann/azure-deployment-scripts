@@ -19,6 +19,9 @@ RUN dpkg -i packages-microsoft-prod.deb && apt-get update && apt-get install -y 
 # Install Azure PowerShell
 RUN pwsh -noni -c "Install-Module Az -AllowClobber -Confirm:\$False -Force"
 
+# Install Azure Functions
+RUN apt-get install azure-functions-core-tools-3
+
 # Copy the secrets file to root folder
 COPY secrets.txt docker_entry.pwsh /
 
