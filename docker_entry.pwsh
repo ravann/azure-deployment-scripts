@@ -1,0 +1,4 @@
+#!/usr/bin/pwsh
+for (; ; ) {
+    Start-Sleep 10
+}
